@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bắt Quà Sinh Nhật VNP Media — WebXR</title>
+  <style>
+    html,body { height:100%; margin:0; font-family: system-ui, Roboto, Arial; background:#071226; color:#fff; }
+    #overlay {
+      position: absolute; left:12px; top:12px; z-index:10;
+      background: linear-gradient(180deg, rgba(0,0,0,0.35), rgba(0,0,0,0.2));
+      padding:10px 12px; border-radius:8px; backdrop-filter: blur(4px);
+    }
+    #hud { font-weight:700; font-size:18px; color:#ffd84d; }
+    #timer { font-weight:600; font-size:16px; color:#ffd84d; margin-top:6px; }
+    #enterVr { margin-top:8px; display:block; }
+    #centerUi {
+      position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:9;
+      text-align:center; pointer-events:auto;
+    }
+    #panel {
+      background: linear-gradient(180deg, rgba(0,0,0,0.5), rgba(0,0,0,0.35));
+      padding:16px 20px; border-radius:12px; width:320px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.6);
+    }
+    button { background:#ffd84d; color:#072034; border:none; padding:10px 14px; border-radius:8px; font-weight:800; cursor:pointer; }
+    #instructions { font-size:13px; color:#dfe9f3; margin-top:8px; }
+    #resultPanel {
+      position:absolute; left:50%; top:10%; transform:translateX(-50%); z-index:11; display:none;
+      background: linear-gradient(180deg,#0b2033,#061726); padding:18px 22px; border-radius:12px;
+      box-shadow:0 12px 40px rgba(0,0,0,0.8);
+      text-align:center;
+    }
+    #logoPreview { width:120px; height:60px; margin:6px auto; display:block; }
+    canvas { display:block; }
+    /* small hint for controller */
+    #hint { position:absolute; right:12px; bottom:12px; z-index:10; color:#bcd; font-size:13px; }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div id="hud">Điểm: <span id="score">0</span></div>
+    <div id="timer">Thời gian: <span id="timeLeft">30</span>s</div>
+    <div style="margin-top:6px; font-size:12px; color:#cfe">Điều khiển: Controller hoặc chuột / chạm</div>
+  </div>
+
+  <div id="centerUi">
+    <div id="panel">
+      <img id="logoPreview" alt="logo" />
+      <div style="font-size:18px; font-weight:800; color:#ffd84d">Bắt quà sinh nhật VNP Media</div>
+      <div id="instructions">Nhắm và bấm nút (Trigger) trên tay cầm VR hoặc click / chạm vào quà để bắt. Thời gian 30s.</div>
+      <div style="margin-top:12px;">
+        <button id="startBtn">Bắt đầu</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="resultPanel">
+    <h2 style="margin:6px 0;color:#ffd84d">Kết quả</h2>
+    <div id="finalText" style="font-size:20px; font-weight:700; margin-bottom:10px;"></div>
+    <button id="replayBtn">Chơi lại</button>
+  </div>
+
+  <div id="hint">Mở bằng Oculus Browser trên Quest để vào VR</div>
+
+  <script type="module">
+  // Imports from unpkg (module versions)
+  import * as THREE from 'https://unpkg.com/three@0.152.2/build/three.module.js';
+  import { XRButton } from 'https://unpkg.com/three@0.152.2/examples/jsm/webxr/XRButton.js';
+
+  // ---------- Scene setup ----------
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x041427); // deep navy
+
+  const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 100);
+  camera.position.set(0, 1.6, 0);
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio ? Math.min(window.devicePixelRatio, 2) : 1);
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.xr.enabled = true;
+  document.body.appendChild(renderer.domElement);
+
+  // Add XR button
+  document.body.appendChild(XRButton.createButton(renderer));
+
+  // Lights
+  const hemi = new THREE.HemisphereLight(0xffffcc, 0x101020, 0.9);
+  scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xfff5a0, 0.6);
+  dir.position.set(2, 4, 1);
+  scene.add(dir);
+
+  // Ground / platform (small circular platform)
+  const platform = new THREE.Mesh(
+    new THREE.CircleGeometry(1.6, 32),
+    new THREE.MeshStandardMaterial({ color: 0x2a1e12, metalness:0.1, roughness:0.9 })
+  );
+  platform.rotation.x = -Math.PI/2;
+  platform.position.y = -0.6;
+  scene.add(platform);
+
+  // Logo placeholder as texture made from canvas (you can replace by loading image file named 'logo.png' later)
+  function makeLogoTexture(text) {
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 256;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffd84d';
+    ctx.fillRect(0,0,c.width,c.height);
+    ctx.fillStyle = '#072034';
+    ctx.fillRect(10,10,c.width-20, c.height-20);
+    ctx.fillStyle = '#ffd84d';
+    ctx.font = 'bold 44px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, c.width/2, c.height/2 + 16);
+    return new THREE.CanvasTexture(c);
+  }
+  const logoTex = makeLogoTexture('VNP MEDIA');
+  const logoMat = new THREE.MeshBasicMaterial({ map: logoTex, toneMapped:false });
+  const logoMesh = new THREE.Mesh(new THREE.PlaneGeometry(0.9, 0.45), logoMat);
+  logoMesh.position.set(0, 1.6, -1.8);
+  scene.add(logoMesh);
+
+  // Also set preview image in UI (data url)
+  document.getElementById('logoPreview').src = logoTex.image.toDataURL();
+
+  // Gift creation helper
+  function makeGift(colorMain=0xff6b3a, ribbon=0xffd84d) {
+    const g = new THREE.Group();
+    const box = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18,0.18,0.18),
+      new THREE.MeshStandardMaterial({ color: colorMain, metalness:0.1, roughness:0.6 })
+    );
+    g.add(box);
+    // ribbon: vertical
+    const v = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.22,0.04), new THREE.MeshStandardMaterial({ color: ribbon }));
+    v.position.set(0,0,0);
+    g.add(v);
+    // ribbon: horizontal
+    const h = new THREE.Mesh(new THREE.BoxGeometry(0.22,0.04,0.04), new THREE.MeshStandardMaterial({ color: ribbon }));
+    h.position.set(0,0,0);
+    g.add(h);
+    // bow (simplified)
+    const bowL = new THREE.Mesh(new THREE.BoxGeometry(0.06,0.03,0.12), new THREE.MeshStandardMaterial({ color: ribbon }));
+    bowL.position.set(-0.04,0.095,0);
+    bowL.rotation.z = 0.6;
+    g.add(bowL);
+    const bowR = bowL.clone();
+    bowR.position.x = 0.04; bowR.rotation.z = -0.6;
+    g.add(bowR);
+    return g;
+  }
+
+  // gift pool
+  const gifts = [];
+  const giftGroup = new THREE.Group();
+  scene.add(giftGroup);
+
+  // spawn gifts around player above, they will fall down toward platform (-0.6)
+  function spawnGift() {
+    const colors = [
+      [0xff6b3a, 0xffd84d],
+      [0xffc857, 0x3a3dff],
+      [0xffdf5d, 0x7a2bff],
+      [0xffa8e6, 0xFFD84D]
+    ];
+    const pick = colors[Math.floor(Math.random()*colors.length)];
+    const gift = makeGift(pick[0], pick[1]);
+    // random position in a hemisphere in front of player
+    const radius = 1.4 + Math.random()*0.8;
+    const theta = Math.random()*Math.PI*2;
+    const y = 1.3 + Math.random()*0.8;
+    gift.position.set(Math.cos(theta)*radius, y, Math.sin(theta)*radius - 0.5);
+    gift.userData = { speed: 0.003 + Math.random()*0.006, caught:false, born:performance.now() };
+    giftGroup.add(gift);
+    gifts.push(gift);
+  }
+
+  // spawn loop
+  let lastSpawn = 0;
+
+  // Raycaster for mouse/touch and controller rays
+  const raycaster = new THREE.Raycaster();
+  const tempMatrix = new THREE.Matrix4();
+
+  // Controller support (VR)
+  const controller = renderer.xr.getController(0);
+  scene.add(controller);
+  const controllerGrip = renderer.xr.getControllerGrip(0);
+  // draw simple ray line for controller
+  const lineGeom = new THREE.BufferGeometry().setFromPoints([ new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1) ]);
+  const lineMat = new THREE.LineBasicMaterial({ color:0xffff80 });
+  const rayLine = new THREE.Line(lineGeom, lineMat);
+  rayLine.scale.z = 4;
+  controller.add(rayLine);
+
+  // handle select (trigger) to catch gift by raycast
+  controller.addEventListener('selectstart', () => { handleControllerSelect(true); });
+  controller.addEventListener('selectend', () => { handleControllerSelect(false); });
+
+  function handleControllerSelect(down){
+    // on selectstart, check intersection with gifts
+    if (down) {
+      tempMatrix.identity().extractRotation(controller.matrixWorld);
+      const origin = new THREE.Vector3().setFromMatrixPosition(controller.matrixWorld);
+      const dir = new THREE.Vector3(0,0,-1).applyMatrix4(tempMatrix);
+      raycaster.set(origin, dir);
+      const intersects = raycaster.intersectObjects(giftGroup.children, true);
+      if (intersects.length>0) {
+        const picked = intersects[0].object.parent || intersects[0].object;
+        catchGift(picked);
+      }
+    }
+  }
+
+  // Mouse / touch input support
+  let mouse = new THREE.Vector2();
+  function onPointerDown(e) {
+    e.preventDefault();
+    // compute normalized device coords from event
+    if (e.touches && e.touches.length>0) {
+      const t = e.touches[0];
+      mouse.x = (t.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = - (t.clientY / window.innerHeight) * 2 + 1;
+    } else {
+      mouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+      mouse.y = - (e.clientY / window.innerHeight) * 2 + 1;
+    }
+    raycaster.setFromCamera(mouse, camera);
+    const intersects = raycaster.intersectObjects(giftGroup.children, true);
+    if (intersects.length>0) {
+      const picked = intersects[0].object.parent || intersects[0].object;
+      catchGift(picked);
+    }
+  }
+  window.addEventListener('pointerdown', onPointerDown, {passive:false});
+  window.addEventListener('touchstart', onPointerDown, {passive:false});
+
+  // Catch logic
+  let score = 0;
+  const scoreEl = document.getElementById('score');
+  function catchGift(g) {
+    if (!g || g.userData.caught) return;
+    g.userData.caught = true;
+    // small pop & remove
+    // animation: scale up then fade out
+    const start = performance.now();
+    const dur = 300;
+    // play catch sound:
+    playCatchSound();
+    // update score
+    score += 1;
+    scoreEl.textContent = score;
+    // visual effect - make it float up and remove
+    const initialPos = g.position.clone();
+    const initialScale = g.scale.clone();
+    const anim = (t) => {
+      const p = (t - start) / dur;
+      if (p >= 1) {
+        giftGroup.remove(g);
+        const idx = gifts.indexOf(g);
+        if (idx>=0) gifts.splice(idx,1);
+        return;
+      }
+      g.position.y = initialPos.y + 0.6 * p;
+      g.scale.setScalar(1 + 0.5*p);
+      requestAnimationFrame(anim);
+    };
+    requestAnimationFrame(anim);
+  }
+
+  // Sound: background synth loop + catch synth
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  // background: low pad using oscillator + gain -> loop via periodic changes
+  const bgGain = audioCtx.createGain(); bgGain.gain.value = 0.03; bgGain.connect(audioCtx.destination);
+  const bgOsc1 = audioCtx.createOscillator(); bgOsc1.type = 'sine'; bgOsc1.frequency.value = 110;
+  const bgOsc2 = audioCtx.createOscillator(); bgOsc2.type = 'sine'; bgOsc2.frequency.value = 220;
+  const bgMix = audioCtx.createGain(); bgMix.gain.value = 0.6;
+  bgOsc1.connect(bgMix); bgOsc2.connect(bgMix); bgMix.connect(bgGain);
+  bgOsc1.start(); bgOsc2.start();
+  // small periodic amplitude modulation for pleasant pad
+  const lfo = audioCtx.createOscillator(); lfo.frequency.value = 0.15; lfo.start();
+  const lfoGain = audioCtx.createGain(); lfoGain.gain.value = 0.02;
+  lfo.connect(lfoGain); lfoGain.connect(bgGain.gain);
+
+  // catch sound function (short beep)
+  function playCatchSound(){
+    const now = audioCtx.currentTime;
+    const o = audioCtx.createOscillator();
+    const g = audioCtx.createGain();
+    o.type = 'triangle';
+    o.frequency.setValueAtTime(880, now);
+    o.frequency.exponentialRampToValueAtTime(440, now + 0.12);
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.exponentialRampToValueAtTime(0.18, now + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(now); o.stop(now + 0.2);
+  }
+
+  // Start/Stop audio context on user gesture for browsers that require
+  function ensureAudioRunning(){
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+  }
+
+  // Game flow: start, timer, end
+  const startBtn = document.getElementById('startBtn');
+  const centerUi = document.getElementById('centerUi');
+  const resultPanel = document.getElementById('resultPanel');
+  const finalText = document.getElementById('finalText');
+  const replayBtn = document.getElementById('replayBtn');
+
+  let playing = false;
+  let timeLeft = 30;
+  let timerInterval = null;
+  function startGame() {
+    ensureAudioRunning();
+    // reset
+    score = 0; scoreEl.textContent = '0';
+    timeLeft = 30; document.getElementById('timeLeft').textContent = timeLeft;
+    playing = true;
+    centerUi.style.display = 'none';
+    resultPanel.style.display = 'none';
+    // clear existing gifts
+    for (const g of [...gifts]) {
+      giftGroup.remove(g);
+    }
+    gifts.length = 0;
+    lastSpawn = performance.now();
+    // spawn initial set
+    for (let i=0;i<6;i++) spawnGift();
+    // timer
+    timerInterval = setInterval(() => {
+      timeLeft -= 1;
+      document.getElementById('timeLeft').textContent = timeLeft;
+      if (timeLeft <= 0) {
+        endGame();
+      }
+    }, 1000);
+  }
+  function endGame() {
+    playing = false;
+    clearInterval(timerInterval);
+    resultPanel.style.display = 'block';
+    finalText.innerHTML = `Bạn được <span style="color:#ffd84d">${score}</span> điểm<br>Chúc VNP Media sinh nhật vui vẻ! 🎉`;
+    // small audio flourish
+    for (let i=0;i<3;i++){
+      setTimeout(playCatchSound, 60 * i);
+    }
+  }
+
+  startBtn.addEventListener('click', () => { startGame(); });
+  replayBtn.addEventListener('click', () => { startGame(); });
+
+  // main render loop
+  const clock = new THREE.Clock();
+  function animate() {
+    renderer.setAnimationLoop(render);
+  }
+
+  function render(timestamp, frame) {
+    const dt = clock.getDelta();
+
+    // spawn timing (every ~700-1000ms)
+    if (playing && performance.now() - lastSpawn > 700 + Math.random()*900) {
+      spawnGift();
+      lastSpawn = performance.now();
+    }
+
+    // update gifts falling
+    for (let i = gifts.length -1; i>=0; i--) {
+      const g = gifts[i];
+      if (g.userData.caught) continue;
+      g.position.y -= g.userData.speed * (60/ (1/dt || 60)) * 1.0; // scale with dt roughly
+      // rotate slowly
+      g.rotation.x += 0.01;
+      g.rotation.y += 0.008;
+      if (g.position.y < -0.4) {
+        // missed => remove and optionally reduce score or end game? We'll just remove and continue
+        giftGroup.remove(g);
+        gifts.splice(i,1);
+      }
+    }
+
+    // If in VR with controllers, we can show reticle or pointer - handled via rayLine
+    // animate logo slightly
+    logoMesh.rotation.y = Math.sin(performance.now() * 0.0006) * 0.08;
+
+    renderer.render(scene, camera);
+  }
+
+  animate();
+
+  // resize handling
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // On first user interaction resume audio (required in many browsers)
+  window.addEventListener('pointerdown', ensureAudioRunning, { once:true });
+  window.addEventListener('touchstart', ensureAudioRunning, { once:true });
+
+  // Helpful: when entering VR, show controller hint
+  renderer.xr.addEventListener('sessionstart', () => {
+    document.getElementById('hint').textContent = 'Đã vào VR — dùng Trigger để bắt quà';
+  });
+  renderer.xr.addEventListener('sessionend', () => {
+    document.getElementById('hint').textContent = 'Mở bằng Oculus Browser trên Quest để vào VR';
+  });
+
+  // Accessibility: allow keyboard 'Space' to act as click (for quick desktop testing)
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Space') {
+      // simulate pointer center click
+      mouse.x = 0; mouse.y = 0;
+      raycaster.setFromCamera(mouse, camera);
+      const intersects = raycaster.intersectObjects(giftGroup.children, true);
+      if (intersects.length>0) {
+        const picked = intersects[0].object.parent || intersects[0].object;
+        catchGift(picked);
+      }
+    }
+  });
+
+  // Quick note: to replace placeholder logo with your file:
+  // 1) Put a file named 'logo.png' next to this index.html and the code below will attempt to load it.
+  fetch('logo.png').then(r => {
+    if (r.ok) return r.blob();
+    throw new Error('no logo file');
+  }).then(blob => {
+    const img = new Image();
+    img.onload = () => {
+      // update THREE texture and UI preview
+      const tex = new THREE.Texture(img); tex.needsUpdate = true;
+      logoMesh.material.map = tex;
+      logoMesh.material.needsUpdate = true;
+      document.getElementById('logoPreview').src = img.src;
+    };
+    img.src = URL.createObjectURL(blob);
+  }).catch(()=>{/* no custom logo found — keep placeholder */});
+
+  // End module
+  </script>
+</body>
+</html>
