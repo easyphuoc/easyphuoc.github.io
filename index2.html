@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Bắt Quà Sinh Nhật VNP Media — Demo WebXR</title>
+  <style>
+    html,body { height:100%; margin:0; background:#071226; overflow:hidden; font-family:system-ui,Roboto,Arial; color:#fff; }
+    #renderCanvas { width:100%; height:100%; touch-action:none; display:block; }
+    #uiTop {
+      position:absolute; left:12px; top:12px; z-index:20; background: rgba(0,0,0,0.35);
+      padding:10px 12px; border-radius:10px; backdrop-filter: blur(4px);
+    }
+    #score { color:#ffd84d; font-weight:800; }
+    #centerPanel {
+      position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); z-index:22;
+      width:360px; max-width:90vw;
+    }
+    .panel {
+      background: linear-gradient(180deg, rgba(2,8,20,0.85), rgba(4,12,32,0.75));
+      border-radius:12px; padding:14px; box-shadow:0 12px 40px rgba(0,0,0,0.6);
+      text-align:center;
+    }
+    .btn { background:#ffd84d; color:#072034; border:none; padding:10px 14px; border-radius:8px; font-weight:800; cursor:pointer; margin-top:8px; }
+    .optlist { text-align:left; margin-top:8px; font-size:14px; color:#dfe9f3; }
+    .hint { position:absolute; right:12px; bottom:12px; z-index:20; color:#cfe; font-size:13px; }
+    #resultBox {
+      position:absolute; left:50%; top:10%; transform:translateX(-50%); z-index:23; display:none;
+      background:linear-gradient(180deg,#072034,#02111b); padding:18px 22px; border-radius:12px; text-align:center;
+      box-shadow:0 12px 40px rgba(0,0,0,0.8);
+    }
+  </style>
+</head>
+<body>
+  <canvas id="renderCanvas"></canvas>
+
+  <div id="uiTop">
+    Điểm: <span id="score">0</span><br/>
+    Thời gian: <span id="timeLeft">30</span>s
+  </div>
+
+  <div id="centerPanel">
+    <div id="startPanel" class="panel">
+      <img id="logoPreview" src="" alt="logo" style="width:140px;height:64px;object-fit:contain;margin-bottom:8px;"/>
+      <h2 style="color:#ffd84d;margin:6px 0">Bắt Quà Sinh Nhật VNP Media</h2>
+      <div style="font-size:14px;color:#dfe9f3">Chọn các món quà sẽ xuất hiện trong game (tối đa 4)</div>
+      <div class="optlist">
+        <label><input type="checkbox" class="giftOpt" value="box" checked> Hộp quà (Box)</label><br/>
+        <label><input type="checkbox" class="giftOpt" value="star" checked> Ngôi sao (Star)</label><br/>
+        <label><input type="checkbox" class="giftOpt" value="balloon" checked> Bong bóng (Balloon)</label><br/>
+        <label><input type="checkbox" class="giftOpt" value="heart" checked> Trái tim (Heart)</label>
+      </div>
+      <div style="margin-top:10px"><button id="startBtn" class="btn">Bắt đầu</button></div>
+      <div style="font-size:12px;color:#bcd;margin-top:8px">Hỗ trợ VR: bấm Enter VR trên góc (nút sẽ hiển thị). Dùng controller/trỏ hoặc click để bắt.</div>
+    </div>
+  </div>
+
+  <div id="resultBox">
+    <h3 style="color:#ffd84d">Kết quả</h3>
+    <div id="finalScore" style="font-size:22px;font-weight:800;margin:8px 0"></div>
+    <button id="replayBtn" class="btn">Chơi lại</button>
+  </div>
+
+  <div class="hint">Host trên HTTPS để dùng WebXR (Quest Browser)</div>
+
+  <!-- Babylon.js CDN -->
+  <script src="https://cdn.babylonjs.com/babylon.js"></script>
+  <script src="https://cdn.babylonjs.com/loaders/babylon.glTF2FileLoader.js"></script>
+  <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+
+  <script>
+  (function(){
+    const canvas = document.getElementById('renderCanvas');
+    const engine = new BABYLON.Engine(canvas, true, { preserveDrawingBuffer: true, stencil: true });
+    const scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color3(0.04,0.08,0.16);
+    scene.fogMode = BABYLON.Scene.FOGMODE_EXP;
+    scene.fogDensity = 0.0025;
+    scene.fogColor = new BABYLON.Color3(0.06,0.12,0.25);
+
+    // camera: for non-VR preview
+    const camera = new BABYLON.UniversalCamera("cam", new BABYLON.Vector3(0,1.6,0), scene);
+    camera.minZ = 0.05;
+    camera.speed = 0.5;
+    camera.attachControl(canvas,true);
+
+    // light
+    const hemi = new BABYLON.HemisphericLight("hemi", new BABYLON.Vector3(0,1,0), scene);
+    hemi.intensity = 0.9;
+    const dir = new BABYLON.DirectionalLight("dir", new BABYLON.Vector3(-0.5,-1,0.2), scene);
+    dir.position = new BABYLON.Vector3(2,6,2);
+    dir.intensity = 1.0;
+    dir.shadowEnabled = true;
+
+    // ground: stylized field with slight height variation
+    const ground = BABYLON.MeshBuilder.CreateGround("ground",{width:30, height:30, subdivisions:4}, scene);
+    const groundMat = new BABYLON.StandardMaterial("gmat", scene);
+    groundMat.diffuseColor = new BABYLON.Color3(0.14,0.55,0.28); // green field
+    ground.material = groundMat;
+    ground.receiveShadows = true;
+
+    // small rolling hills using noise-ish boxes (visual depth)
+    for (let i=0;i<40;i++){
+      const b = BABYLON.MeshBuilder.CreateBox("h"+i, {size:1.8}, scene);
+      b.position = new BABYLON.Vector3((Math.random()-0.5)*50, -0.6 + Math.random()*0.2, -5 - Math.random()*40);
+      b.scaling.x = 3 + Math.random()*3;
+      b.scaling.z = 0.3 + Math.random()*1.2;
+      b.rotation.y = Math.random()*Math.PI;
+      const m = groundMat.clone("gm"+i);
+      m.diffuseColor = groundMat.diffuseColor.scale(0.8 + Math.random()*0.4);
+      b.material = m;
+      b.receiveShadows = false;
+    }
+
+    // farmhouse silhouette (simple)
+    const house = BABYLON.MeshBuilder.CreateBox("house",{width:4, height:2.3, depth:3}, scene);
+    house.position = new BABYLON.Vector3(-6,0.55,-12);
+    const houseMat = new BABYLON.StandardMaterial("hmat", scene);
+    houseMat.diffuseColor = new BABYLON.Color3(0.55,0.22,0.12);
+    house.material = houseMat;
+
+    // palm tree simple
+    function makeTree(x,z,scale=1.0){
+      const trunk = BABYLON.MeshBuilder.CreateCylinder("tr", {diameterTop:0.4, diameterBottom:0.6, height:3*scale}, scene);
+      trunk.position = new BABYLON.Vector3(x,0.95,z);
+      trunk.rotation.z = (Math.random()-0.5)*0.2;
+      const tMat = new BABYLON.StandardMaterial("tmat", scene); tMat.diffuseColor = new BABYLON.Color3(0.35,0.18,0.08);
+      trunk.material = tMat;
+      const leaves = BABYLON.MeshBuilder.CreateSphere("lv",{diameter:2*scale, segments:4}, scene);
+      leaves.position = new BABYLON.Vector3(x,2.3*scale,z);
+      const lMat = new BABYLON.StandardMaterial("lmat", scene); lMat.diffuseColor = new BABYLON.Color3(0.10,0.55,0.22);
+      leaves.material = lMat;
+    }
+    makeTree(5,-10,1.2);
+    makeTree(8,-18,1.0);
+    makeTree(-3,-8,0.9);
+
+    // distant sky gradient via large sphere
+    const sky = BABYLON.MeshBuilder.CreateSphere("sky",{diameter:200, sideOrientation:BABYLON.Mesh.BACKSIDE}, scene);
+    const skyMat = new BABYLON.StandardMaterial("skm", scene);
+    skyMat.emissiveColor = new BABYLON.Color3(0.06,0.12,0.25);
+    sky.material = skyMat;
+    sky.position = new BABYLON.Vector3(0,20,0);
+
+    // logo plane (3D) - placeholder (canvas texture)
+    function makeLogoTexture(text) {
+      const c = document.createElement('canvas'); c.width=512; c.height=256;
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#ffd84d'; ctx.fillRect(0,0,c.width,c.height);
+      ctx.fillStyle = '#072034'; ctx.fillRect(12,12,c.width-24,c.height-24);
+      ctx.fillStyle = '#ffd84d'; ctx.font = 'bold 40px sans-serif'; ctx.textAlign='center';
+      ctx.fillText(text, c.width/2, c.height/2+12);
+      return c;
+    }
+    const logoCanvas = makeLogoTexture("VNP MEDIA");
+    document.getElementById('logoPreview').src = logoCanvas.toDataURL();
+
+    const logoTex = new BABYLON.DynamicTexture("logoDT", {width:512, height:256}, scene, false);
+    logoTex.getContext().drawImage(logoCanvas,0,0);
+    logoTex.update();
+
+    const logoMat3 = new BABYLON.StandardMaterial("lm", scene);
+    logoMat3.diffuseTexture = logoTex;
+    logoMat3.emissiveColor = new BABYLON.Color3(1,1,1);
+
+    const logoPlane = BABYLON.MeshBuilder.CreatePlane("logoPlane",{width:1.2, height:0.55}, scene);
+    logoPlane.position = new BABYLON.Vector3(3.5,2.0,-1.8);
+    logoPlane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+    logoPlane.material = logoMat3;
+
+    // particle systems (sparkles + rainbow)
+    // sparkle system - many tiny particles floating
+    const sparkle = new BABYLON.ParticleSystem("sparkle", 400, scene);
+    sparkle.particleTexture = new BABYLON.Texture("https://playground.babylonjs.com/textures/flare.png", scene);
+    sparkle.emitter = new BABYLON.Vector3(0,1.2,0);
+    sparkle.minEmitBox = new BABYLON.Vector3(-8,0,-8);
+    sparkle.maxEmitBox = new BABYLON.Vector3(8,4,-20);
+    sparkle.color1 = new BABYLON.Color4(1,0.9,0.6, 0.9);
+    sparkle.color2 = new BABYLON.Color4(0.9,0.6,1, 0.8);
+    sparkle.minSize = 0.02; sparkle.maxSize = 0.12;
+    sparkle.minLifeTime = 3; sparkle.maxLifeTime = 8;
+    sparkle.emitRate = 20;
+    sparkle.blendMode = BABYLON.ParticleSystem.BLENDMODE_ONEONE;
+    sparkle.direction1 = new BABYLON.Vector3(-0.2,0.1,-0.1);
+    sparkle.direction2 = new BABYLON.Vector3(0.2,0.6,0.1);
+    sparkle.start();
+
+    // rainbow circular ribbons particles that rise up when catching
+    function makeBurst(position, color1, color2) {
+      const ps = new BABYLON.ParticleSystem("burst", 200, scene);
+      ps.particleTexture = new BABYLON.Texture("https://playground.babylonjs.com/textures/flare.png", scene);
+      ps.emitter = position.clone();
+      ps.minEmitBox = new BABYLON.Vector3(0,0,0);
+      ps.maxEmitBox = new BABYLON.Vector3(0,0,0);
+      ps.color1 = color1;
+      ps.color2 = color2;
+      ps.minSize = 0.04; ps.maxSize = 0.18;
+      ps.minLifeTime = 0.6; ps.maxLifeTime = 1.1;
+      ps.emitRate = 400;
+      ps.direction1 = new BABYLON.Vector3(-1,1,-1);
+      ps.direction2 = new BABYLON.Vector3(1,2,1);
+      ps.gravity = new BABYLON.Vector3(0, -0.5, 0);
+      ps.disposeOnStop = true;
+      ps.start();
+      setTimeout(()=>ps.stop(),120);
+    }
+
+    // gifts management
+    const gifts = [];
+    const giftParent = new BABYLON.TransformNode("gifts", scene);
+
+    function createGift(type) {
+      let g;
+      if (type === 'box') {
+        g = new BABYLON.TransformNode("gift_box", scene);
+        const b = BABYLON.MeshBuilder.CreateBox("gb",{size:0.28}, scene);
+        b.parent = g;
+        const gm = new BABYLON.StandardMaterial("gm", scene); gm.diffuseColor = new BABYLON.Color3(1,0.6,0.3); gm.specularPower=64;
+        b.material = gm;
+        const ribbon = BABYLON.MeshBuilder.CreateBox("rb",{height:0.32, width:0.06, depth:0.06}, scene);
+        ribbon.parent = g; ribbon.position.y = 0; ribbon.material = new BABYLON.StandardMaterial("rm",scene); ribbon.material.diffuseColor = new BABYLON.Color3(1,0.86,0.3);
+        const bow = BABYLON.MeshBuilder.CreateTorus("bow",{thickness:0.02, diameter:0.16, tessellation:16},scene);
+        bow.parent = g; bow.position.y = 0.18; bow.material = ribbon.material;
+      } else if (type === 'star') {
+        g = new BABYLON.TransformNode("gift_star", scene);
+        const s = BABYLON.MeshBuilder.CreatePolyhedron("star",{type:2,size:0.25},scene); // type 2 is octahedron-ish; good enough
+        s.parent = g; s.rotationQuaternion = null;
+        const sm = new BABYLON.StandardMaterial("sm",scene); sm.emissiveColor = new BABYLON.Color3(1,0.95,0.6);
+        s.material = sm;
+      } else if (type === 'balloon') {
+        g = new BABYLON.TransformNode("gift_balloon", scene);
+        const b = BABYLON.MeshBuilder.CreateSphere("bl",{diameter:0.32, segments:16},scene);
+        b.parent = g; b.material = new BABYLON.StandardMaterial("blm",scene); b.material.diffuseColor = new BABYLON.Color3(1,0.5,0.8);
+        const stringg = BABYLON.MeshBuilder.CreateTube("st",{path:[new BABYLON.Vector3(0,-0.16,0), new BABYLON.Vector3(0,-0.45,0)], radius:0.005, tessellation:6},scene);
+        stringg.parent = g; stringg.material = new BABYLON.StandardMaterial("stm",scene); stringg.material.diffuseColor = new BABYLON.Color3(0.9,0.9,0.9);
+      } else if (type === 'heart') {
+        g = new BABYLON.TransformNode("gift_heart", scene);
+        // simple heart via extruded shape (approx)
+        const heart = BABYLON.MeshBuilder.CreateSphere("ht",{diameter:0.3, segments:8},scene);
+        heart.parent = g; heart.scaling = new BABYLON.Vector3(1,0.9,0.7);
+        heart.material = new BABYLON.StandardMaterial("hm",scene);
+        heart.material.diffuseColor = new BABYLON.Color3(1,0.2,0.5);
+      }
+      // initial transform
+      g.position = new BABYLON.Vector3((Math.random()-0.5)*3, 3.0 + Math.random()*1.2, -2 - Math.random()*4);
+      g.rotation = new BABYLON.Vector3(Math.random()*0.3, Math.random()*Math.PI*2, Math.random()*0.3);
+      g._type = type;
+      g._speed = 0.004 + Math.random()*0.006;
+      g._caught = false;
+      g.parent = giftParent;
+      gifts.push(g);
+      return g;
+    }
+
+    // spawn loop
+    let lastSpawn = 0;
+    let spawnInterval = 800;
+
+    // catch logic: ray picking from pointer or controller
+    const xrHelperPromise = scene.createDefaultXRExperienceAsync({ floorMeshes: [ground] });
+    let xrHelper = null;
+    xrHelperPromise.then(h => {
+      xrHelper = h;
+      // when in VR, create pointer meshes for controllers
+      const xr = h.input;
+      xr.onControllerAddedObservable.add((controller) => {
+        const mesh = BABYLON.MeshBuilder.CreateCylinder("ptr",{height:0.01,diameterTop:0.01,diameterBottom:0.01}, scene);
+        mesh.parent = controller.grip || controller.pointer;
+        mesh.position = new BABYLON.Vector3(0,0,0);
+        mesh.isVisible = false; // keep invisible; we use ray
+      });
+    });
+
+    // pointer (mouse) pick
+    canvas.addEventListener('pointerdown', (evt)=>{
+      if (!playing) return;
+      const pick = scene.pick(scene.pointerX, scene.pointerY, (m)=>m.getParent()===giftParent || m===giftParent);
+      if (pick && pick.hit && pick.pickedMesh) {
+        let node = pick.pickedMesh;
+        // climb to transform node parent if needed
+        while (node && !(node instanceof BABYLON.TransformNode)) {
+          node = node.parent;
+        }
+        if (node && gifts.indexOf(node)!==-1) {
+          catchGift(node);
+        }
+      }
+    }, {passive:true});
+
+    // catch by controller select (WebXR)
+    xrHelperPromise.then(h => {
+      const input = h.input;
+      input.onControllerAddedObservable.add((controller) => {
+        controller.onMotionControllerInitObservable.add((motionController) => {
+          const xrPointer = controller.pointer;
+          controller.onTriggerStateChanged.add((state) => {
+            if (state.pressed) {
+              // raycast from controller pointer
+              const origin = controller.pointer.position;
+              const dir = controller.pointer.forward;
+              const ray = new BABYLON.Ray(origin, dir, 8);
+              const pick = scene.pickWithRay(ray, (m)=>m.getParent()===giftParent || m===giftParent);
+              if (pick && pick.hit && pick.pickedMesh) {
+                let node = pick.pickedMesh;
+                while (node && !(node instanceof BABYLON.TransformNode)) node = node.parent;
+                if (node && gifts.indexOf(node)!==-1) catchGift(node);
+              }
+            }
+          });
+        });
+      });
+    });
+
+    // catch effect and scoring
+    let score = 0;
+    const scoreEl = document.getElementById('score');
+    function catchGift(node) {
+      if (!node || node._caught) return;
+      node._caught = true;
+      // play sound
+      playCatchSound();
+      // create burst colors (rainbow)
+      const p = node.position.clone();
+      const colors = [
+        [new BABYLON.Color4(1,0.45,0.2,1), new BABYLON.Color4(1,0.9,0.5,1)],
+        [new BABYLON.Color4(0.9,0.3,1,1), new BABYLON.Color4(0.6,1,0.9,1)],
+        [new BABYLON.Color4(0.4,0.8,1,1), new BABYLON.Color4(1,0.8,0.6,1)]
+      ];
+      const c = colors[Math.floor(Math.random()*colors.length)];
+      makeBurst(p, c[0], c[1]);
+      // score increment base on type
+      const add = (node._type==='star')?3:(node._type==='heart')?2:(node._type==='balloon')?1:4;
+      score += add;
+      scoreEl.textContent = score;
+      // animate float up & fade out
+      const start = performance.now();
+      const dur = 500;
+      const startPos = node.position.clone();
+      const anim = () => {
+        const ptime = performance.now();
+        const t = (ptime - start)/dur;
+        if (t >= 1) {
+          // remove
+          try { node.dispose(); } catch(e){}
+          const idx = gifts.indexOf(node); if (idx>=0) gifts.splice(idx,1);
+          return;
+        }
+        node.position.y = startPos.y + 0.6 * t;
+        node.rotation.y += 0.1;
+        requestAnimationFrame(anim);
+      };
+      requestAnimationFrame(anim);
+    }
+
+    // simple audio: background pad + catch blip
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    // background pad
+    const bgGain = audioCtx.createGain(); bgGain.gain.value = 0.02; bgGain.connect(audioCtx.destination);
+    const o1 = audioCtx.createOscillator(); o1.type='sine'; o1.frequency.value = 110; o1.start();
+    const o2 = audioCtx.createOscillator(); o2.type='sine'; o2.frequency.value = 220; o2.start();
+    const mix = audioCtx.createGain(); mix.gain.value = 0.8; o1.connect(mix); o2.connect(mix); mix.connect(bgGain);
+    const lfo = audioCtx.createOscillator(); lfo.frequency.value = 0.12; lfo.start();
+    const lfoGain = audioCtx.createGain(); lfoGain.gain.value = 0.01; lfo.connect(lfoGain); lfoGain.connect(bgGain.gain);
+
+    function playCatchSound(){
+      const now = audioCtx.currentTime;
+      const osc = audioCtx.createOscillator(); osc.type='triangle'; osc.frequency.setValueAtTime(880,now);
+      const g = audioCtx.createGain(); g.gain.setValueAtTime(0.0001,now);
+      osc.connect(g); g.connect(audioCtx.destination);
+      g.gain.exponentialRampToValueAtTime(0.15, now + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + 0.18);
+      osc.frequency.exponentialRampToValueAtTime(440, now + 0.12);
+      osc.start(now); osc.stop(now + 0.20);
+    }
+    function ensureAudio(){
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
+    window.addEventListener('pointerdown', ensureAudio, {once:true});
+    window.addEventListener('touchstart', ensureAudio, {once:true});
+
+    // game flow
+    const startBtn = document.getElementById('startBtn');
+    const startPanel = document.getElementById('startPanel');
+    const resultBox = document.getElementById('resultBox');
+    const finalScore = document.getElementById('finalScore');
+    const replayBtn = document.getElementById('replayBtn');
+    let playing = false;
+    let timeLeft = 30;
+    let timerId = null;
+    let selectedTypes = ['box','star','balloon','heart'];
+
+    function getSelectedTypes(){
+      const nodes = document.querySelectorAll('.giftOpt');
+      const arr = [];
+      nodes.forEach(n=>{ if (n.checked) arr.push(n.value); });
+      return arr.length?arr:['box','star','balloon','heart'];
+    }
+
+    startBtn.addEventListener('click', ()=>{
+      selectedTypes = getSelectedTypes();
+      if (selectedTypes.length === 0) { alert('Vui lòng chọn ít nhất 1 loại quà'); return; }
+      startPanel.style.display = 'none';
+      score = 0; scoreEl.textContent = '0';
+      timeLeft = 30; document.getElementById('timeLeft').textContent = timeLeft;
+      playing = true;
+      lastSpawn = performance.now();
+      // spawn some initial gifts
+      for (let i=0;i<6;i++) spawnGift();
+      timerId = setInterval(()=>{
+        timeLeft -= 1; document.getElementById('timeLeft').textContent = timeLeft;
+        if (timeLeft <= 0) endGame();
+      },1000);
+    });
+
+    replayBtn.addEventListener('click', ()=>{
+      resultBox.style.display = 'none';
+      startPanel.style.display = 'block';
+    });
+
+    function endGame(){
+      playing = false;
+      clearInterval(timerId);
+      finalScore.innerHTML = `Bạn được <span style="color:#ffd84d">${score}</span> điểm<br>Chúc VNP Media sinh nhật vui vẻ! 🎉`;
+      resultBox.style.display = 'block';
+      // small flourish
+      for (let i=0;i<4;i++) setTimeout(()=>playCatchSound(), i*80);
+    }
+
+    function spawnGift(){
+      const t = selectedTypes[Math.floor(Math.random()*selectedTypes.length)];
+      createGift(t);
+    }
+
+    // animation loop
+    engine.runRenderLoop(()=>{
+      const now = performance.now();
+      if (playing && now - lastSpawn > (500 + Math.random()*900)) {
+        spawnGift();
+        lastSpawn = now;
+      }
+      // update gifts falling
+      for (let i=gifts.length-1;i>=0;i--){
+        const g = gifts[i];
+        if (g._caught) continue;
+        g.position.y -= g._speed * engine.getDeltaTime();
+        g.rotation.y += 0.006 * engine.getDeltaTime();
+        if (g.position.y < 0.15) {
+          // missed -> remove gracefully
+          try { g.dispose(); } catch(e){}
+          gifts.splice(i,1);
+        }
+      }
+      scene.render();
+    });
+
+    // responsive
+    window.addEventListener('resize', ()=>{ engine.resize(); });
+
+    // Provide guidance for WebXR button (Babylon adds it automatically when XR enabled)
+    // Note: If you want to force 'Enter VR' button visible early, you can create XRHelper and then show, but default is okay.
+
+    // Helpful: allow center-screen click (space)
+    window.addEventListener('keydown', (e)=>{
+      if (e.code === 'Space' && playing) {
+        // simulate pick from center
+        const pick = scene.pick(scene.getEngine().getRenderWidth()/2, scene.getEngine().getRenderHeight()/2, (m)=>m.getParent()===giftParent || m===giftParent);
+        if (pick && pick.hit) {
+          let node = pick.pickedMesh;
+          while (node && !(node instanceof BABYLON.TransformNode)) node = node.parent;
+          if (node && gifts.indexOf(node)!==-1) catchGift(node);
+        }
+      }
+    });
+
+    // finished setup
+    console.log('Demo scene ready.');
+  })();
+  </script>
+</body>
+</html>
